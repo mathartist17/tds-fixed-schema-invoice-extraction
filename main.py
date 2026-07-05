@@ -31,7 +31,10 @@ def parse_date(text: str):
     return None
 
 def parse_amount(text: str, label_pattern: str):
-    match = re.search(r"(?:" + label_pattern + r").*?([\d,]+\.\d{2})", text)
+    match = re.search(
+        r"(?:" + label_pattern + r").*?([\d,]+(?:\.\d{1,2})?)",
+        text
+    )
     if not match:
         return None
     return float(match.group(1).replace(",", ""))
