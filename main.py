@@ -99,6 +99,35 @@ def parse_amount(text: str, label_pattern: str):
 
 @app.post("/extract")
 def extract(req: InvoiceRequest):
+    text = req.invoice_text
+
+    invoice_number_match = re.search(
+        r"(?:Invoice\s*(?:No\.?|Number|#)|Inv\.?\s*No\.?|Bill\s*No\.?)\s*[:#]?\s*(\S+)",
+        text,
+        re.IGNORECASE,
+    )
+    vendor_match = re.search(r"Vendor:\s*(.+)", text)
+
+    invoice_number = invoice_number_match.group(1).strip() if invoice_number_match else None
+    vendor = vendor_match.group(1).strip() if vendor_match else None
+    date = parse_date(text)
+    amount = parse_amount(text, r"Subtotal:")
+    tax = parse_amount(text, r"GST|Tax")
+
+    currency = "INR" if re.search(r"Rs\.|INR|₹", text) else None
+
+    regex_result = {
+        "invoice_no": invoice_number,
+        "date": date,
+        "vendor": vendor,
+        "amount": amount,
+        "tax": tax,
+        "currency": currency,
+    }
+
+    if any(value is not None for value in regex_result.values()):
+        return regex_result
+
     token = os.getenv("AIPIPE_TOKEN")
 
     if token:
@@ -125,31 +154,7 @@ def extract(req: InvoiceRequest):
         except Exception:
             pass
 
-    text = req.invoice_text
-
-    invoice_number_match = re.search(
-        r"(?:Invoice\s*(?:No\.?|Number|#)|Inv\.?\s*No\.?|Bill\s*No\.?)\s*[:#]?\s*(\S+)",
-        text,
-        re.IGNORECASE,
-    )
-    vendor_match = re.search(r"Vendor:\s*(.+)", text)
-
-    invoice_number = invoice_number_match.group(1).strip() if invoice_number_match else None
-    vendor = vendor_match.group(1).strip() if vendor_match else None
-    date = parse_date(text)
-    amount = parse_amount(text, r"Subtotal:")
-    tax = parse_amount(text, r"GST|Tax")
-
-    currency = "INR" if re.search(r"Rs\.|INR|₹", text) else None
-
-    return {
-        "invoice_no": invoice_number,
-        "date": date,
-        "vendor": vendor,
-        "amount": amount,
-        "tax": tax,
-        "currency": currency,
-    }
+    return regex_result
 
 @app.get("/")
 def health_check():
