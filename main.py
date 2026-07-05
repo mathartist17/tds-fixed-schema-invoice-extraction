@@ -1,11 +1,9 @@
 import json
 import os
 import re
-from datetime import datetime
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -16,19 +14,18 @@ app.add_middleware(
     allow_headers = ["*"]
 )
 
-class InvoiceRequest(BaseModel):
-    invoice_text: str
-
-
-AI_PIPE_MODEL = "openai/gpt-4.1-nano"
+AI_PIPE_MODEL = "openai/gpt-4.1"
 
 
 def build_invoice_prompt(text: str):
     return (
-        "Extract invoice details from the text below and return only valid JSON "
-        "with these keys: invoice_no, date, vendor, amount, tax, currency. "
-        "Use null when a value is missing. Normalize date to YYYY-MM-DD and "
-        "return amount and tax as numbers.\n\n"
+        "Extract these fields from the invoice text and return JSON with EXACTLY "
+        "these keys: invoice_no, date, vendor, amount, tax, currency.\n"
+        "- date: ISO YYYY-MM-DD\n"
+        "- amount: the SUBTOTAL before tax, as a plain number (no separators)\n"
+        "- tax: the tax amount only, as a plain number\n"
+        "- currency: ISO code (INR, USD, EUR...)\n"
+        "- use null if a field is not present.\n\n"
         f"Invoice text:\n{text}"
     )
 
@@ -74,87 +71,44 @@ def parse_json_response(text: str):
 
     return json.loads(cleaned[start : end + 1])
 
-def parse_date(text: str):
-    match = re.search(r"Date:\s*(.+)", text)
-    if not match:
-        return None
-    raw = match.group(1).strip()
-    formats = ["%d %B %Y", "%d %b %Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"]
 
-    for format in formats:
-        try:
-            return datetime.strptime(raw, format).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return None
+async def extract_from_ai(text: str):
+    token = os.getenv("AIPIPE_TOKEN")
+    if not token:
+        return {}
 
-def parse_amount(text: str, label_pattern: str):
-    match = re.search(
-        r"(?:" + label_pattern + r").*?([\d,]+(?:\.\d{1,2})?)",
-        text
-    )
-    if not match:
-        return None
-    return float(match.group(1).replace(",", ""))
-
-@app.post("/extract")
-def extract(req: InvoiceRequest):
-    text = req.invoice_text
-
-    invoice_number_match = re.search(
-        r"(?:Invoice\s*(?:No\.?|Number|#)|Inv\.?\s*No\.?|Bill\s*No\.?)\s*[:#]?\s*(\S+)",
-        text,
-        re.IGNORECASE,
-    )
-    vendor_match = re.search(r"Vendor:\s*(.+)", text)
-
-    invoice_number = invoice_number_match.group(1).strip() if invoice_number_match else None
-    vendor = vendor_match.group(1).strip() if vendor_match else None
-    date = parse_date(text)
-    amount = parse_amount(text, r"Subtotal:")
-    tax = parse_amount(text, r"GST|Tax")
-
-    currency = "INR" if re.search(r"Rs\.|INR|₹", text) else None
-
-    regex_result = {
-        "invoice_no": invoice_number,
-        "date": date,
-        "vendor": vendor,
-        "amount": amount,
-        "tax": tax,
-        "currency": currency,
+    prompt = build_invoice_prompt(text)
+    payload = {
+        "model": AI_PIPE_MODEL,
+        "input": prompt,
+        "temperature": 0,
     }
 
-    if any(value is not None for value in regex_result.values()):
-        return regex_result
-
-    token = os.getenv("AIPIPE_TOKEN")
-
-    if token:
-        payload = {
-            "model": AI_PIPE_MODEL,
-            "input": build_invoice_prompt(req.invoice_text),
-            "temperature": 0,
-        }
-
-        try:
-            response = httpx.post(
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
                 "https://aipipe.org/openrouter/v1/responses",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=30.0,
             )
             response.raise_for_status()
             data = response.json()
             ai_text = extract_text_from_ai_response(data)
             return parse_json_response(ai_text)
-        except Exception:
-            pass
+    except Exception:
+        return {}
 
-    return regex_result
+
+@app.post("/extract")
+async def extract(request: Request):
+    body = await request.json()
+    text = body.get("invoice_text", "")
+    out = await extract_from_ai(text)
+    keys = ["invoice_no", "date", "vendor", "amount", "tax", "currency"]
+    return {key: out.get(key) for key in keys}
 
 @app.get("/")
 def health_check():
