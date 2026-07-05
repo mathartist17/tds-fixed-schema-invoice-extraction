@@ -40,7 +40,11 @@ def parse_amount(text: str, label_pattern: str):
 def extract(req: InvoiceRequest):
     text = req.invoice_text
 
-    invoice_number_match = re.search(r"Invoice No:\s*(\S+)", text)
+    invoice_number_match = re.search(
+        r"(?:Invoice\s*(?:No\.?|Number|#)|Inv\.?\s*No\.?|Bill\s*No\.?)\s*[:#]?\s*(\S+)",
+        text,
+        re.IGNORECASE
+    )
     vendor_match = re.search(r"Vendor:\s*(.+)", text)
 
     invoice_number = invoice_number_match.group(1).strip() if invoice_number_match else None
