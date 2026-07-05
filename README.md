@@ -1,5 +1,6 @@
 ## Notes
 
+- Set `AIPIPE_TOKEN` in Render for the AI Pipe-backed extractor.
 - To run the server
 `uv run uvicorn main:app --reload`
 - Build command in Render
